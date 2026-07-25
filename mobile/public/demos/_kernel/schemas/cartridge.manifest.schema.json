@@ -37,7 +37,7 @@
             },
             "args_schema": {
               "type": "string",
-              "description": "Path to JSON Schema for the method args. The kernel compiles the opcode list from it (enum-valued properties; see PLAN.md)."
+              "description": "Path to JSON Schema for the method args. The kernel compiles the opcode list from it: enum-valued properties, and integers carrying both minimum and maximum (with optional multipleOf). Capped at 512 opcodes per method. See PLAN.md."
             },
             "opcodes": {
               "type": "array",

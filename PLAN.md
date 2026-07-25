@@ -45,7 +45,7 @@ byte-identical to the hand-written one.
 Deletes the duplication. Changes nothing observable. Do it first because everything else
 builds on `schema → trie` being the only path.
 
-### 2. Bounded integers — *tractable*
+### 2. Bounded integers — ✅ **done 2026-07-25**
 
 `{"type":"integer","minimum":0,"maximum":39}` becomes a digit sub-trie. Requires care
 about tokenizer behaviour — `37` may be one token or two depending on the model, so the
@@ -123,6 +123,37 @@ An explicit `opcodes` array is still honoured and now takes precedence. That is
 deliberate: it is the escape hatch for a method the compiler cannot express, so
 adding one is never blocked on phase 3 landing.
 
-**Next: phase 2.** `{"type":"integer","minimum":0,"maximum":39}` as a digit
-sub-trie. The compiler already refuses it with a message naming the phase, so
-the failure is legible rather than mysterious.
+## Phase 2 — done
+
+Integers carrying both bounds now compile, with `multipleOf` as an optional
+step. `{"column": 0..9, "rotation": 0..3}` — the example this phase was written
+for — produces 40 opcodes that branch into exactly ten at the column digit.
+
+**The digit sub-trie is real, and there is a test that says so.** `TokenTrie`
+merges common prefixes on insert, so forty integers cost forty leaves under one
+stem rather than forty independent strings. `__tests__` asserts the stem never
+branches and that all ten digits meet at the same node — if that ever stops
+holding, enumeration stops being a reasonable way to spend memory and the test
+fails rather than the load quietly getting slower.
+
+**What is refused, deliberately:** an integer missing either bound (no finite
+enumeration, and inventing a bound would silently constrain the model to
+something nobody wrote down), an inverted range, a `multipleOf` admitting no
+value, and any product over `MAX_OPCODES_PER_METHOD` (512) — checked before
+building, so a wide product fails fast instead of allocating its way there.
+
+That ceiling is the honest limit of enumeration. Every opcode costs one async
+`tokenize` call at cartridge build, so a wide range becomes a stall before the
+first move. Past it the answer is a real trie slot — a node accepting any digit
+and looping — which is the same machinery phase 3 needs and belongs there.
+
+**Next: phase 3, free strings.** Read that section again before starting; it is
+where "grammar-enforced" gets weaker, and it decides whether this generalises
+past games.
+
+### Not done, and not part of phase 2
+
+Tetris still exposes `move {"action": "left"|"right"|...}`. Giving it
+`place {"column":…,"rotation":…}` would shrink the Program layer, which is the
+reason the phase exists — but it changes the engine and the demo, so it is its
+own change with its own test, not a rider on the compiler.

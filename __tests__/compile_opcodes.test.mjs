@@ -13,7 +13,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { compileOpcodes, resolveOpcodes, UnsupportedSchemaError }
+import { compileOpcodes, resolveOpcodes, UnsupportedSchemaError, MAX_OPCODES_PER_METHOD }
   from '../mobile/public/demos/_kernel/compile_opcodes.js';
 import { Cartridge } from '../mobile/public/demos/_kernel/cartridge.js';
 
@@ -132,11 +132,11 @@ test('multiple enum properties produce the cartesian product in declaration orde
   ]);
 });
 
-test('a non-enum property is refused, and says which phase covers it', () => {
-  const schema = { type: 'object', properties: { x: { type: 'integer' } } };
+test('a free string is refused, and says which phase covers it', () => {
+  const schema = { type: 'object', properties: { note: { type: 'string' } } };
   assert.throws(
     () => compileOpcodes('c', 'm', schema),
-    (err) => err instanceof UnsupportedSchemaError && /phase 2/.test(err.message),
+    (err) => err instanceof UnsupportedSchemaError && /phase 3/.test(err.message),
   );
 });
 
@@ -144,4 +144,112 @@ test('an explicit opcodes array still wins over the schema', async () => {
   const explicit = ['<|call|>c.m {"anything":"goes"}<|/call|>\n'];
   const out = await resolveOpcodes('c', 'm', { opcodes: explicit, args_schema: 'x.json' }, null);
   assert.deepEqual(out, explicit);
+});
+
+// ── Phase 2: bounded integers ──────────────────────────────────────────────
+
+test('a bounded integer enumerates its range inclusively', () => {
+  const schema = { type: 'object', properties: { n: { type: 'integer', minimum: 0, maximum: 3 } } };
+  assert.deepEqual(compileOpcodes('c', 'm', schema), [
+    '<|call|>c.m {"n":0}<|/call|>\n',
+    '<|call|>c.m {"n":1}<|/call|>\n',
+    '<|call|>c.m {"n":2}<|/call|>\n',
+    '<|call|>c.m {"n":3}<|/call|>\n',
+  ]);
+});
+
+test('multipleOf starts at the first multiple at or above minimum', () => {
+  const schema = {
+    type: 'object',
+    properties: { n: { type: 'integer', minimum: 1, maximum: 9, multipleOf: 3 } },
+  };
+  assert.deepEqual(compileOpcodes('c', 'm', schema).map(s => s.match(/"n":(\d+)/)[1]), ['3', '6', '9']);
+});
+
+test('an integer crossed with an enum gives the full product', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      column: { type: 'integer', minimum: 0, maximum: 2 },
+      rotation: { enum: ['cw', 'ccw'] },
+    },
+  };
+  assert.deepEqual(compileOpcodes('c', 'm', schema), [
+    '<|call|>c.m {"column":0,"rotation":"cw"}<|/call|>\n',
+    '<|call|>c.m {"column":0,"rotation":"ccw"}<|/call|>\n',
+    '<|call|>c.m {"column":1,"rotation":"cw"}<|/call|>\n',
+    '<|call|>c.m {"column":1,"rotation":"ccw"}<|/call|>\n',
+    '<|call|>c.m {"column":2,"rotation":"cw"}<|/call|>\n',
+    '<|call|>c.m {"column":2,"rotation":"ccw"}<|/call|>\n',
+  ]);
+});
+
+test('an unbounded integer is refused, naming the missing bound', () => {
+  for (const [prop, missing] of [
+    [{ type: 'integer', minimum: 0 }, /"maximum"/],
+    [{ type: 'integer', maximum: 9 }, /"minimum"/],
+  ]) {
+    assert.throws(
+      () => compileOpcodes('c', 'm', { type: 'object', properties: { n: prop } }),
+      (err) => err instanceof UnsupportedSchemaError && missing.test(err.message),
+    );
+  }
+});
+
+test('an inverted range is refused', () => {
+  assert.throws(
+    () => compileOpcodes('c', 'm', {
+      type: 'object', properties: { n: { type: 'integer', minimum: 5, maximum: 1 } },
+    }),
+    UnsupportedSchemaError,
+  );
+});
+
+test('a range admitting no multiple is refused rather than compiling to nothing', () => {
+  assert.throws(
+    () => compileOpcodes('c', 'm', {
+      type: 'object', properties: { n: { type: 'integer', minimum: 4, maximum: 6, multipleOf: 10 } },
+    }),
+    (err) => err instanceof UnsupportedSchemaError && /admits no values/.test(err.message),
+  );
+});
+
+test('a product over the ceiling is refused before it is built', () => {
+  const schema = {
+    type: 'object',
+    properties: { n: { type: 'integer', minimum: 0, maximum: MAX_OPCODES_PER_METHOD } },
+  };
+  assert.throws(
+    () => compileOpcodes('c', 'm', schema),
+    (err) => err instanceof UnsupportedSchemaError
+      && new RegExp(`over the ceiling of ${MAX_OPCODES_PER_METHOD}`).test(err.message),
+  );
+});
+
+test('enumerating a range shares one stem in the trie, not N independent strings', async () => {
+  // The point of enumeration being acceptable: TokenTrie merges common
+  // prefixes, so forty integers cost forty leaves under one stem. If this ever
+  // stops holding, enumeration stops being a reasonable way to spend memory.
+  const { TokenTrie } = await import('../mobile/public/demos/_kernel/token_trie.js');
+  const tokenize = (s) => [...s].map(ch => ch.codePointAt(0));
+
+  const opcodes = compileOpcodes('t', 'move', {
+    type: 'object', properties: { column: { type: 'integer', minimum: 0, maximum: 9 } },
+  });
+
+  const trie = new TokenTrie();
+  for (const op of opcodes) trie.insert(op, tokenize(op), 't.move');
+
+  assert.equal(trie.opcodes.length, 10);
+
+  // After the shared stem there is exactly one legal next token per branch...
+  const stem = tokenize('<|call|>t.move {"column":');
+  const afterStem = trie.getValidNextTokens(stem, null);
+  assert.equal(afterStem.size, 10, 'the ten digits should branch at the same node');
+
+  // ...and the stem itself never branches.
+  for (let i = 1; i < stem.length; i++) {
+    const valid = trie.getValidNextTokens(stem.slice(0, i), null);
+    assert.equal(valid.size, 1, `stem token ${i} should not branch`);
+  }
 });
