@@ -109,9 +109,21 @@ function valuesFor(prop, name, where) {
 
   throw new UnsupportedSchemaError(
     `${where}: property "${name}" is neither an enum nor a bounded integer. ` +
-    `Free strings are phase 3 (see PLAN.md); until then, declare an explicit ` +
-    `"opcodes" array on the method to hand-write this one.`,
+    `A free string needs "maxTokens" declared on the property so the slot has ` +
+    `a cap; see PLAN.md phase 3.`,
   );
+}
+
+/**
+ * Is this property a free string — one that compiles to a slot rather than to
+ * enumerated values?
+ *
+ * `maxTokens` is required rather than defaulted. A slot with no cap is a slot
+ * the model can sit in until it runs out of budget, and picking a number on the
+ * author's behalf would hide that decision.
+ */
+export function isSlotProperty(prop) {
+  return prop?.type === 'string' && !Array.isArray(prop?.enum);
 }
 
 function enumerateArgs(schema, where) {
@@ -198,3 +210,77 @@ export async function resolveOpcodes(cartridgeName, methodName, methodDef, loadS
 
   return compileOpcodes(cartridgeName, methodName, await loadSchema(schemaPath));
 }
+
+// ── Phase 3: slots for free strings ────────────────────────────────────────
+
+/**
+ * Split a method into the literal text around its slots.
+ *
+ * Returns `null` when the method has no free-string property — the caller then
+ * enumerates as before. Otherwise returns
+ * `{ template, parts }` where `parts` alternates literal strings and slot
+ * descriptors, ready to be tokenized and handed to `TokenTrie.insertWithSlots`.
+ *
+ * Only one free string per method is supported. Two adjacent slots have no
+ * boundary the trie could use to tell where the first ends, and a method
+ * wanting two of them is better expressed as two methods.
+ */
+export function compileSlotTemplate(cartridgeName, methodName, schema) {
+  const where = `${cartridgeName}.${methodName}`;
+  const props = schema?.properties ?? {};
+  const names = Object.keys(props);
+  const slotNames = names.filter(n => isSlotProperty(props[n]));
+
+  if (slotNames.length === 0) return null;
+  if (slotNames.length > 1) {
+    throw new UnsupportedSchemaError(
+      `${where}: ${slotNames.length} free-string properties (${slotNames.join(', ')}). ` +
+      `Only one is supported — with two, nothing marks where the first ends. ` +
+      `Split this into separate methods.`,
+    );
+  }
+
+  const slotName = slotNames[0];
+  const prop = props[slotName];
+  const maxTokens = prop.maxTokens;
+  if (!Number.isInteger(maxTokens) || maxTokens < 1) {
+    throw new UnsupportedSchemaError(
+      `${where}: property "${slotName}" is a free string and needs a positive ` +
+      `integer "maxTokens". An uncapped slot is one the model can sit in until ` +
+      `it exhausts its budget; that limit should be written down, not guessed.`,
+    );
+  }
+
+  // Every other property must still enumerate, and the slot has to sit last so
+  // there is exactly one fixed tail to close it.
+  const fixed = names.filter(n => n !== slotName);
+  const combos = enumerateArgs(
+    { properties: Object.fromEntries(fixed.map(n => [n, props[n]])) },
+    where,
+  );
+
+  const parts = combos.map((args) => {
+    // JSON.stringify of the fixed args gives the head; the slot is appended as
+    // the last key so the tail is always `"}<|/call|>\n`.
+    const head = fixed.length
+      ? `${JSON.stringify(args).slice(0, -1)},${JSON.stringify(slotName)}:"`
+      : `{${JSON.stringify(slotName)}:"`;
+    return {
+      prefix: `<|call|>${cartridgeName}.${methodName} ${head}`,
+      suffix: `"}<|/call|>\n`,
+      slot: { name: slotName, maxTokens, minTokens: prop.minTokens ?? 0 },
+    };
+  });
+
+  return { slotName, parts };
+}
+
+/**
+ * Text that may not appear inside a JSON string slot.
+ *
+ * A bare `"` would close the string early and a raw newline is invalid JSON, so
+ * neither can be content. Backslash is excluded too: allowing it would let the
+ * model open an escape sequence the slot cannot finish checking, and the parser
+ * downstream does no repair.
+ */
+export const JSON_STRING_FORBID = /["\n\r\\]/;
