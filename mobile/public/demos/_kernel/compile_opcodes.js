@@ -15,11 +15,15 @@
 // opcodes". This module makes the schema the source of truth and the opcode
 // list a derived artifact.
 //
-// Phase 1 of PLAN.md: enum-valued properties only. That covers every existing
-// cartridge, so the compiled output is expected to be byte-identical to the
-// hand-written lists — see __tests__/compile_opcodes.test.js. Bounded integers
-// are phase 2, free strings are phase 3, and both need trie *slots* rather
-// than enumeration.
+// Phases 1 and 2 of PLAN.md live here: enum-valued properties, and integers
+// carrying both bounds. Both compile by enumeration, which is why there is a
+// ceiling — see MAX_OPCODES_PER_METHOD.
+//
+// Enumeration gives a digit sub-trie for free: `{"column":0}` through
+// `{"column":39}` share the stem `<|call|>tetris.move {"column":` and branch
+// only at the digits, because TokenTrie merges common prefixes on insert. What
+// it does not give you is a *slot* — a node accepting any digit and looping —
+// which is what wide ranges and free strings (phase 3) need.
 
 /** Marker for a schema this phase cannot express. */
 export class UnsupportedSchemaError extends Error {
@@ -30,12 +34,86 @@ export class UnsupportedSchemaError extends Error {
 }
 
 /**
+ * Ceiling on how many opcodes one method may compile to.
+ *
+ * Enumeration is not free. Every opcode costs one async `tokenize` call when
+ * the cartridge is built, so a wide range turns into a long stall before the
+ * first move. The trie itself copes fine — shared prefixes mean 40 integers
+ * add 40 leaves under one common stem, not 40 independent strings — but the
+ * tokenizer round-trips are linear and they happen at load.
+ *
+ * Past this ceiling, enumeration is the wrong mechanism and the answer is a
+ * real slot in the trie: a node that accepts any digit token and loops. That
+ * is the same machinery free strings need, so it belongs with phase 3 rather
+ * than being bolted on here.
+ */
+export const MAX_OPCODES_PER_METHOD = 512;
+
+/**
  * Every combination of the enum-valued properties, in declaration order.
  *
  * Property order follows the schema's `properties` key order, because that is
  * the order the emitted JSON must use — the trie matches literal text, so
  * {"a":1,"b":2} and {"b":2,"a":1} are different opcodes.
  */
+/**
+ * The values one property may take.
+ *
+ * Two shapes are supported: an explicit `enum`, and a bounded integer range.
+ * A range needs both ends — an open one has no finite enumeration, and
+ * guessing a bound would silently constrain the model to something nobody
+ * wrote down.
+ */
+function valuesFor(prop, name, where) {
+  if (Array.isArray(prop?.enum) && prop.enum.length > 0) return prop.enum;
+
+  if (prop?.type === 'integer') {
+    const { minimum, maximum } = prop;
+    const hasMin = Number.isInteger(minimum);
+    const hasMax = Number.isInteger(maximum);
+
+    if (!hasMin || !hasMax) {
+      throw new UnsupportedSchemaError(
+        `${where}: property "${name}" is an integer without ${!hasMin ? '"minimum"' : '"maximum"'}. ` +
+        `An unbounded range has no finite enumeration — give it both ends, or ` +
+        `declare an explicit "opcodes" array.`,
+      );
+    }
+    if (maximum < minimum) {
+      throw new UnsupportedSchemaError(
+        `${where}: property "${name}" has maximum ${maximum} below minimum ${minimum}.`,
+      );
+    }
+
+    const step = prop.multipleOf ?? 1;
+    if (!Number.isInteger(step) || step < 1) {
+      throw new UnsupportedSchemaError(
+        `${where}: property "${name}" has multipleOf ${prop.multipleOf}; expected a positive integer.`,
+      );
+    }
+
+    const values = [];
+    // Start at the first multiple of `step` at or above minimum, so
+    // {minimum: 1, maximum: 9, multipleOf: 3} yields 3, 6, 9 — not 1, 4, 7.
+    const first = Math.ceil(minimum / step) * step;
+    for (let v = first; v <= maximum; v += step) values.push(v);
+
+    if (values.length === 0) {
+      throw new UnsupportedSchemaError(
+        `${where}: property "${name}" admits no values — no multiple of ${step} ` +
+        `falls between ${minimum} and ${maximum}.`,
+      );
+    }
+    return values;
+  }
+
+  throw new UnsupportedSchemaError(
+    `${where}: property "${name}" is neither an enum nor a bounded integer. ` +
+    `Free strings are phase 3 (see PLAN.md); until then, declare an explicit ` +
+    `"opcodes" array on the method to hand-write this one.`,
+  );
+}
+
 function enumerateArgs(schema, where) {
   const props = schema?.properties ?? {};
   const names = Object.keys(props);
@@ -43,15 +121,17 @@ function enumerateArgs(schema, where) {
 
   let combos = [{}];
   for (const name of names) {
-    const prop = props[name];
-    const values = prop?.enum;
+    const values = valuesFor(props[name], name, where);
 
-    if (!Array.isArray(values) || values.length === 0) {
+    // Check before building, so a wide product fails fast instead of
+    // allocating its way there.
+    const projected = combos.length * values.length;
+    if (projected > MAX_OPCODES_PER_METHOD) {
       throw new UnsupportedSchemaError(
-        `${where}: property "${name}" has no enum. Phase 1 compiles enum-valued ` +
-        `properties only; bounded integers are phase 2 and free strings are ` +
-        `phase 3 (see PLAN.md). Declare an explicit "opcodes" array on the ` +
-        `method to hand-write this one in the meantime.`,
+        `${where}: would compile to ${projected} opcodes, over the ceiling of ` +
+        `${MAX_OPCODES_PER_METHOD}. Every opcode costs a tokenize call at load, ` +
+        `so this would stall the cartridge build. Narrow the range, or wait for ` +
+        `trie slots (phase 3) which replace enumeration for wide domains.`,
       );
     }
 
