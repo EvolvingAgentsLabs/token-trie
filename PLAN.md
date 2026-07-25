@@ -54,7 +54,7 @@ trie must be built over token IDs, not characters, exactly as opcodes already ar
 This is the phase that unlocks a real Tetris move (`{"column": 7, "rotation": 2}`) and
 therefore lets the Program layer shrink.
 
-### 3. Free strings — *the hard one, and the reason to be sceptical*
+### 3. Free strings — ✅ **done 2026-07-25** (and still the reason to be sceptical)
 
 `{"type":"string"}` with no enum has no finite trie. Constraining it means a different
 mechanism: allow any token except the structural ones, bounded by a length cap and a
@@ -147,9 +147,39 @@ That ceiling is the honest limit of enumeration. Every opcode costs one async
 first move. Past it the answer is a real trie slot — a node accepting any digit
 and looping — which is the same machinery phase 3 needs and belongs there.
 
-**Next: phase 3, free strings.** Read that section again before starting; it is
-where "grammar-enforced" gets weaker, and it decides whether this generalises
-past games.
+## Phase 3 — done, with the caveat intact
+
+`{"type":"string","maxTokens":N}` compiles to a **slot**: a trie node that
+accepts any token whose text does not break out of the JSON string, up to a cap,
+exiting on the closing quote.
+
+**The architecture had to bend, and it is worth naming where.** Everything else
+in the trie is token IDs, so the valid-next set is `node.children.keys()`. A slot
+has no such set — membership depends on what a token *says*, which means
+detokenizing it, which is async and belongs to the backend. So
+`getValidNextTokens` now returns either a `Set` or a `SlotConstraint`, and the
+sampler resolves the latter by decoding each top-K candidate (cached) and
+testing it. That is the one place the trie stops being purely token-level.
+
+**What the slot guarantees:** the model cannot close the string early, cannot
+emit a raw newline or backslash, and cannot run past its cap. When nothing
+usable is in top-K it closes the string rather than guessing at content — the
+only fallback that stays grammatical.
+
+**What it does not guarantee, and this is the caveat this section always
+carried:** inside the slot the grammar constrains *shape*, not *content*. What
+the model writes in there is its own. That is exactly what GBNF would give, and
+no more. `Sampler.generate` now returns `slotTokens` alongside `fellBackSteps`
+so a caller can see how much of an output was shaped rather than chosen.
+
+**Limits, deliberate:** one free string per method — with two, nothing marks
+where the first ends, and a method wanting two is two methods. And `maxTokens`
+is required rather than defaulted, because an uncapped slot is one the model can
+sit in until its budget runs out, and that decision should be written down.
+
+**Next: phase 4, `CartridgeRegistry`.** Mechanical, and now unblocked — it was
+gated on 1–3 because a registry over hand-enumerated opcodes multiplies the
+hand-writing problem instead of solving it.
 
 ### Not done, and not part of phase 2
 
