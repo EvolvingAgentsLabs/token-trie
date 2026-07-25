@@ -66,7 +66,7 @@ and no more. Second, an agent OS whose tools take free strings is most of an age
 this phase decides whether the project generalises or stays a games demo. **Do not
 promise phase 3 before phase 2 lands.**
 
-### 4. `CartridgeRegistry` — *mechanical, gated on 1–3*
+### 4. `CartridgeRegistry` — ✅ **done 2026-07-25**
 
 One trie unifying several cartridges, so a session can hold more than one skill. Straight
 extension of `Cartridge.build()`; the reason it is last is that a registry over
@@ -177,9 +177,49 @@ where the first ends, and a method wanting two is two methods. And `maxTokens`
 is required rather than defaulted, because an uncapped slot is one the model can
 sit in until its budget runs out, and that decision should be written down.
 
-**Next: phase 4, `CartridgeRegistry`.** Mechanical, and now unblocked — it was
-gated on 1–3 because a registry over hand-enumerated opcodes multiplies the
-hand-writing problem instead of solving it.
+## Phase 4 — done
+
+Several cartridges share one trie. Tetris and Scavenger together: 14 method
+opcodes, 3 halt, 17 total.
+
+**Almost nothing was needed, and that is the point of having gated it.** The
+wire format already carries the cartridge name — `<|call|>tetris.move …` versus
+`<|call|>scavenger.move …` — so two cartridges land on different branches with
+no disambiguation, and `dispatch.js` parses the name back out unchanged. The
+work was `Cartridge.buildInto(trie, …)` plus a registry holding the phase-control
+sets.
+
+**Halt opcodes are deduplicated.** Every cartridge declares the same three by
+default; inserting a private copy each would put indistinguishable
+`<|halt|>status=success` opcodes in one trie and force phase control to carry
+all of them to mean "may halt".
+
+**Method names are qualified.** `methodIndices("tetris.move")`, not `"move"` — a
+registry can hold two cartridges that both define `move`, and an unqualified
+name would silently pick one. Refused rather than resolved.
+
+A test asserts a single-cartridge registry produces exactly what building that
+cartridge alone produces, so moving a demo onto the registry cannot quietly
+change its grammar.
+
+## All four phases are done
+
+What began as a hand-written list of complete instruction strings is now
+compiled: enums and bounded integers enumerate, free strings become slots, and
+several cartridges share one trie.
+
+**The limit that none of this moved** is the one at the top of this document:
+the Program layer still does the planning. Tetris works because a Dellacherie
+scorer ranks all forty placements and the model picks from the ranked list. That
+was true before phase 1 and it is true now. If the next thing you want is for
+the model to plan, no amount of grammar work gets you there — that is a
+different project, and the honest pitch remains *grammar-safe on-device
+execution of pre-planned skills*.
+
+Two smaller things left on the table, both noted where they arise: Tetris still
+exposes `move {"action": …}` rather than the `place {"column":…,"rotation":…}`
+that phase 2 unlocked, and no demo uses the registry yet. Both change a game
+rather than the kernel, so they are their own work.
 
 ### Not done, and not part of phase 2
 
