@@ -48,22 +48,44 @@ export class Cartridge {
   // Build the trie. tokenize is an async function (string -> Promise<number[]>).
   async build(tokenize) {
     this.trie = new TokenTrie();
+    await this.buildInto(this.trie, tokenize);
+    return this.trie;
+  }
+
+  /**
+   * Insert this cartridge's opcodes into an existing trie.
+   *
+   * Split out so a CartridgeRegistry can put several cartridges into one trie.
+   * The opcode strings already carry the cartridge name — `tetris.move` versus
+   * `scavenger.move` — so sharing a trie needs no disambiguation; the wire
+   * format did that work already.
+   *
+   * @param haltIndex optional Map<string, number> of halt strings already in
+   *   the trie. Passing one deduplicates `<|halt|>status=success` across
+   *   cartridges instead of inserting a private copy per cartridge.
+   */
+  async buildInto(trie, tokenize, haltIndex = null) {
+    this.trie = trie;
     for (const [methodName, methodDef] of Object.entries(this.methods)) {
       const indices = new Set();
       const opcodes = await resolveOpcodes(this.name, methodName, methodDef, this.loadSchema);
       for (const opcodeString of opcodes) {
         const tokens = await tokenize(opcodeString);
-        const idx = this.trie.insert(opcodeString, tokens, `${this.name}.${methodName}`);
+        const idx = trie.insert(opcodeString, tokens, `${this.name}.${methodName}`);
         indices.add(idx);
       }
       this.methodOpcodeIndices.set(methodName, indices);
     }
     for (const haltString of this.halt) {
-      const tokens = await tokenize(haltString);
-      const idx = this.trie.insert(haltString, tokens, `__halt__`);
+      let idx = haltIndex?.get(haltString);
+      if (idx === undefined) {
+        const tokens = await tokenize(haltString);
+        idx = trie.insert(haltString, tokens, `__halt__`);
+        haltIndex?.set(haltString, idx);
+      }
       this.haltOpcodeIndices.add(idx);
     }
-    return this.trie;
+    return trie;
   }
 
   // Convenience: opcode index sets for phase control
