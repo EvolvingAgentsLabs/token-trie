@@ -1,5 +1,9 @@
 # token-trie
 
+<p align="center">
+  <img src="docs/img/token-trie.jpg" alt="Legal instruction paths continue; everything else dead-ends" width="100%">
+</p>
+
 **A 350M model plays Tetris in your browser and cannot emit invalid syntax.**
 
 Grammar enforcement in the decoder, not in the prompt. Every legal instruction is
