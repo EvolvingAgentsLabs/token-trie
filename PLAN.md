@@ -35,7 +35,7 @@ be expressed. Neither can any tool that takes a string.
 The work is to make the trie compile from the schema instead of from the string list.
 Four phases, in dependency order, with honest difficulty.
 
-### 1. Enum properties → trie branches — *mechanical*
+### 1. Enum properties → trie branches — ✅ **done 2026-07-25**
 
 Compile `{"type":"string","enum":[...]}` into the branches the `opcodes` array currently
 spells out. Every existing cartridge is expressible this way, so this phase is a pure
@@ -107,9 +107,22 @@ token trie replaced it deliberately, because wllama's GBNF implementation is bro
 opcode-heavy grammars (upstream #168). That is a feature: it widens the set of usable
 backends to anything that exposes per-step token probabilities.
 
-## Definition of done for phase 1
+## Phase 1 — done
 
-- `Cartridge.build()` reads `args_schema` and produces the trie.
-- The `opcodes` array is deleted from both manifests.
-- A test asserts the generated trie equals the previously hand-written one.
-- Both demos still play, unchanged, with no observable difference.
+- ✅ `Cartridge.build()` reads `args_schema` and produces the trie, via
+  `_kernel/compile_opcodes.js`.
+- ✅ The `opcodes` arrays are gone from both manifests — seven methods across
+  the two cartridges now declare only `args_schema`.
+- ✅ `__tests__/compile_opcodes.test.mjs` asserts the compiled output is
+  byte-identical to the hand-written lists, and that a trie built from the
+  schema matches one built from those lists. 8 tests, `node --test`.
+- ✅ Verified in the browser: fetching the schema over HTTP and compiling
+  produces the same ten opcodes (seven methods + three halt) as before.
+
+An explicit `opcodes` array is still honoured and now takes precedence. That is
+deliberate: it is the escape hatch for a method the compiler cannot express, so
+adding one is never blocked on phase 3 landing.
+
+**Next: phase 2.** `{"type":"integer","minimum":0,"maximum":39}` as a digit
+sub-trie. The compiler already refuses it with a message naming the phase, so
+the failure is legible rather than mysterious.

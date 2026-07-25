@@ -700,7 +700,7 @@ $('btnLoad').onclick = async () => {
 
     setStatus('Loading tetris cartridge manifest...');
     const manifest = await fetch(TETRIS_MANIFEST_URL).then(r => r.json());
-    cartridge = new Cartridge(manifest);
+    cartridge = new Cartridge(manifest, { baseUrl: TETRIS_MANIFEST_URL });
 
     setStatus('Building token trie for grammar enforcement...');
     await cartridge.build(s => wllama.tokenize(s));

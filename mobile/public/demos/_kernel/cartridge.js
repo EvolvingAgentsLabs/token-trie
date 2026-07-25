@@ -7,10 +7,21 @@
 // Manifest schema: kernel/schemas/cartridge.manifest.schema.json
 
 import { TokenTrie } from './token_trie.js';
+import { resolveOpcodes } from './compile_opcodes.js';
 
 export class Cartridge {
-  constructor(manifest) {
+  /**
+   * @param manifest parsed manifest.json
+   * @param opts.baseUrl URL the manifest was fetched from. `args_schema` paths
+   *   are resolved against it, so the opcode list can be compiled from the
+   *   schema instead of hand-written into the manifest.
+   * @param opts.loadSchema async (path) => schema — overrides baseUrl, for
+   *   callers that are not fetching over HTTP (tests, Node).
+   */
+  constructor(manifest, opts = {}) {
     this.manifest = manifest;
+    this.baseUrl = opts.baseUrl ?? null;
+    this.loadSchema = opts.loadSchema ?? (this.baseUrl ? this.#fetchSchema.bind(this) : null);
     this.name = manifest.name;
     this.version = manifest.version ?? '0.0.0';
     this.description = manifest.description ?? '';
@@ -26,12 +37,21 @@ export class Cartridge {
     this.trie = null;
   }
 
+  // Resolve `args_schema` relative to the manifest URL.
+  async #fetchSchema(schemaPath) {
+    const url = new URL(schemaPath, new URL(this.baseUrl, globalThis.location?.href)).href;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`cartridge: cannot load args_schema ${url}: ${res.status}`);
+    return res.json();
+  }
+
   // Build the trie. tokenize is an async function (string -> Promise<number[]>).
   async build(tokenize) {
     this.trie = new TokenTrie();
     for (const [methodName, methodDef] of Object.entries(this.methods)) {
       const indices = new Set();
-      for (const opcodeString of methodDef.opcodes ?? []) {
+      const opcodes = await resolveOpcodes(this.name, methodName, methodDef, this.loadSchema);
+      for (const opcodeString of opcodes) {
         const tokens = await tokenize(opcodeString);
         const idx = this.trie.insert(opcodeString, tokens, `${this.name}.${methodName}`);
         indices.add(idx);
@@ -83,14 +103,22 @@ export function validateManifest(manifest) {
     errors.push('manifest.methods is required (object)');
   } else {
     for (const [methodName, methodDef] of Object.entries(manifest.methods)) {
-      if (!methodDef.opcodes || !Array.isArray(methodDef.opcodes) || methodDef.opcodes.length === 0) {
-        errors.push(`method "${methodName}": opcodes must be a non-empty array`);
+      // A method declares its opcodes one of two ways: an `args_schema` the
+      // kernel compiles from, or an explicit `opcodes` array for the cases the
+      // compiler cannot express yet. Neither is a broken manifest.
+      const hasSchema = typeof methodDef.args_schema === 'string' && methodDef.args_schema.length > 0;
+      const hasOpcodes = Array.isArray(methodDef.opcodes) && methodDef.opcodes.length > 0;
+
+      if (!hasSchema && !hasOpcodes) {
+        errors.push(`method "${methodName}": needs either "args_schema" or a non-empty "opcodes" array`);
         continue;
       }
-      for (let i = 0; i < methodDef.opcodes.length; i++) {
-        const op = methodDef.opcodes[i];
-        if (typeof op !== 'string' || !op.length) {
-          errors.push(`method "${methodName}".opcodes[${i}]: must be a non-empty string`);
+      if (hasOpcodes) {
+        for (let i = 0; i < methodDef.opcodes.length; i++) {
+          const op = methodDef.opcodes[i];
+          if (typeof op !== 'string' || !op.length) {
+            errors.push(`method "${methodName}".opcodes[${i}]: must be a non-empty string`);
+          }
         }
       }
     }
