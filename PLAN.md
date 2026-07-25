@@ -1,0 +1,115 @@
+# Plan — from enumerated opcodes to constrained arguments
+
+## Where this actually stands
+
+The kernel is 385 lines across five files and it works: a 350M model plays Tetris in a
+browser tab and cannot emit invalid syntax, because `token_trie.js` masks the sampler's
+valid-next set at every decoding step.
+
+It works because **every legal instruction is written out in full, by hand**, in the
+cartridge manifest:
+
+```json
+"opcodes": [
+  "<|call|>tetris.move {\"action\":\"left\"}<|/call|>\n",
+  "<|call|>tetris.move {\"action\":\"right\"}<|/call|>\n",
+  "<|call|>tetris.move {\"action\":\"down\"}<|/call|>\n",
+  "<|call|>tetris.move {\"action\":\"rotate\"}<|/call|>\n",
+  "<|call|>tetris.move {\"action\":\"drop\"}<|/call|>\n"
+]
+```
+
+Five actions, five strings. The model picks one; the parse is a regex with no JSON repair
+and no retry, because the text is guaranteed to be one of those five.
+
+The same manifest also declares `args_schema: "schemas/move.args.schema.json"`, and that
+schema is an enum of the same five values. **Nothing reads it.** The kernel's own manifest
+schema is candid about this: *"informational; trie enforces enumerated opcodes."*
+
+So the position is: a real constrained-decoding runtime whose grammar is a hard-coded
+list. That is fine for a five-action game and it is the ceiling. `move {"x": 37}` cannot
+be expressed. Neither can any tool that takes a string.
+
+## What has to be built
+
+The work is to make the trie compile from the schema instead of from the string list.
+Four phases, in dependency order, with honest difficulty.
+
+### 1. Enum properties → trie branches — *mechanical*
+
+Compile `{"type":"string","enum":[...]}` into the branches the `opcodes` array currently
+spells out. Every existing cartridge is expressible this way, so this phase is a pure
+refactor with a behavioural test already available: the generated trie must be
+byte-identical to the hand-written one.
+
+Deletes the duplication. Changes nothing observable. Do it first because everything else
+builds on `schema → trie` being the only path.
+
+### 2. Bounded integers — *tractable*
+
+`{"type":"integer","minimum":0,"maximum":39}` becomes a digit sub-trie. Requires care
+about tokenizer behaviour — `37` may be one token or two depending on the model, so the
+trie must be built over token IDs, not characters, exactly as opcodes already are.
+
+This is the phase that unlocks a real Tetris move (`{"column": 7, "rotation": 2}`) and
+therefore lets the Program layer shrink.
+
+### 3. Free strings — *the hard one, and the reason to be sceptical*
+
+`{"type":"string"}` with no enum has no finite trie. Constraining it means a different
+mechanism: allow any token except the structural ones, bounded by a length cap and a
+terminator, with the trie resuming after the closing quote.
+
+Two things to know before starting. First, this is where "grammar-enforced" gets weaker —
+you are constraining the *shape*, not the content, which is what GBNF would also give you
+and no more. Second, an agent OS whose tools take free strings is most of an agent OS, so
+this phase decides whether the project generalises or stays a games demo. **Do not
+promise phase 3 before phase 2 lands.**
+
+### 4. `CartridgeRegistry` — *mechanical, gated on 1–3*
+
+One trie unifying several cartridges, so a session can hold more than one skill. Straight
+extension of `Cartridge.build()`; the reason it is last is that a registry over
+hand-enumerated opcodes multiplies the hand-writing problem rather than solving it.
+
+## Two constraints that are not phases
+
+**The tokenizer.** This works on LFM 2.5 because that tokenizer treats `<|call|>` and
+`<|halt|>` as single tokens, so the trie's valid-next set lands inside top-K. Qwen and
+Gemma split them across several tokens, the intersection usually comes up empty, and
+`sampler.js` falls back to `[...validSet][0]` — output stays syntactically valid while the
+model stops choosing. It counts these in `fellBackSteps`, which nothing reads.
+
+Fixing this properly means adding the markers to the tokenizer and post-training, which
+is a different project. Fixing it cheaply means widening the logit window; try that first
+and **read `fellBackSteps`** before believing any result on a new model.
+
+**The Program layer.** In the Tetris demo a hand-written Dellacherie scorer enumerates all
+forty placements and ranks them; the model picks from the ranked list. `CLAUDE.md` states
+the rule plainly: *"The LLM-CPU is a ratifier, not a planner."*
+
+That is a legitimate finding about what a 350M model can be trusted with, and it is also
+the project's real limit: every skill needs a planner written behind it. Phases 1–4 do not
+change that. If the pitch is "grammar-safe on-device execution of pre-planned skills", the
+architecture supports it. If the pitch is "a small model runs an agent OS", it does not,
+and no amount of trie work will make it.
+
+## What to ignore
+
+`llm_os` is archived. Its `v2`/`v3` directories implement all thirteen opcodes but have
+**no decode-time enforcement at all** — they constrain with stop sequences and regex over
+a cloud model, while the file header claims GBNF passthrough it never had. There is
+nothing to port from them except the opcode list, which is already in the ISA spec.
+
+`isa.gbnf` does not exist and never did in any working state; the twelve grammar fixtures
+in the old repo were never run through a validator. GBNF is not the target here — the
+token trie replaced it deliberately, because wllama's GBNF implementation is broken for
+opcode-heavy grammars (upstream #168). That is a feature: it widens the set of usable
+backends to anything that exposes per-step token probabilities.
+
+## Definition of done for phase 1
+
+- `Cartridge.build()` reads `args_schema` and produces the trie.
+- The `opcodes` array is deleted from both manifests.
+- A test asserts the generated trie equals the previously hand-written one.
+- Both demos still play, unchanged, with no observable difference.

@@ -1,4 +1,21 @@
-# skillos_mini — Development Guide
+# token-trie — Development Guide
+
+> [!WARNING]
+> **Sections 3 and 5 below describe files that do not exist.** They list
+> `mobile/src/lib/kernel/`, `runner.ts`, `v2_adapter.ts`, `wllama_*.ts` and a
+> `kernel-mode/` demo. Those landed in PRs on 2026-05-05 and were deleted hours
+> later by the pivot commit the same day. `mobile/src/` contains exactly four
+> files: `App.svelte`, `main.ts`, `app.css`, `components/GamesLauncher.svelte`.
+>
+> The live kernel is at `mobile/public/demos/_kernel/`. Verify on disk before
+> trusting any path in this document.
+>
+> The repo was renamed from `skillos_mini` to `token-trie` on 2026-07-24.
+> See [PLAN.md](PLAN.md) for what is actually being built next.
+
+---
+
+
 
 > **Read this file at the start of every work session.**
 > It is the source of truth for *why* we are building, *what* we are building, and *what not to build*. If this guide and the code disagree, this guide wins. If this guide and a user request disagree, escalate to Matias before proceeding.

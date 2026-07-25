@@ -1,3 +1,55 @@
+# token-trie
+
+**A 350M model plays Tetris in your browser and cannot emit invalid syntax.**
+
+Grammar enforcement in the decoder, not in the prompt. Every legal instruction is
+pre-tokenized into a trie of token IDs, and at each decoding step the sampler's
+valid-next set is intersected with the trie. Malformed output is not discouraged —
+it has no path.
+
+Downstream that pays off immediately: `dispatch.js` parses with a plain regex. No
+JSON repair, no schema retry, no validation layer.
+
+## Run it
+
+No API key, no build step, no account. First load pulls ~230 MB of model weights;
+after that it is instant.
+
+```bash
+cd mobile/public && python3 -m http.server 8000
+# open http://localhost:8000/demos/
+```
+
+## What is honest about this
+
+The Program layer does the planning. In Tetris a hand-written Dellacherie scorer
+enumerates all forty placements and ranks them; the model picks from the ranked list.
+It is the decoder and the selector, not the planner — see `CLAUDE.md` §4.2.
+
+That is a real result about what a 350M model can be trusted with. It is not "a small
+model runs an OS", and every skill needs a planner written behind it.
+
+The current grammar is also a hand-written list of complete instruction strings, which
+is why there are exactly five Tetris moves. Compiling it from the argument schemas
+instead is the next piece of work.
+
+→ **[PLAN.md](PLAN.md)** — what is built, what is not, and in what order.
+
+## Layout
+
+```
+mobile/public/demos/_kernel/   the kernel — 385 lines, five files, no dependencies
+mobile/public/demos/{tetris,scavenger}/   the two demos
+mobile/public/demos/_cart/     cartridge manifests
+strategies/                    markdown strategy cartridges (prompt-time only)
+mobile/src/                    a Svelte launcher — four files
+```
+
+Renamed from `skillos_mini` on 2026-07-24; "mini" undersold a constrained-decoding
+runtime.
+
+---
+
 # skillos_mini
 
 A games-first browser playground for the LLM-OS kernel. A 350M-parameter LLM plays Tetris and solves grid-world quests by emitting grammar-constrained ISA opcodes. **Strategy markdown cartridges** customize how the LLM plays.
