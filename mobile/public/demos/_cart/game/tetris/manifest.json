@@ -6,28 +6,15 @@
   "methods": {
     "move": {
       "summary": "Execute an action: left, right, down, rotate, or drop. Returns updated board state.",
-      "args_schema": "schemas/move.args.schema.json",
-      "opcodes": [
-        "<|call|>tetris.move {\"action\":\"left\"}<|/call|>\n",
-        "<|call|>tetris.move {\"action\":\"right\"}<|/call|>\n",
-        "<|call|>tetris.move {\"action\":\"down\"}<|/call|>\n",
-        "<|call|>tetris.move {\"action\":\"rotate\"}<|/call|>\n",
-        "<|call|>tetris.move {\"action\":\"drop\"}<|/call|>\n"
-      ]
+      "args_schema": "schemas/move.args.schema.json"
     },
     "observe": {
       "summary": "Return current board state without advancing the game.",
-      "args_schema": "schemas/empty.args.schema.json",
-      "opcodes": [
-        "<|call|>tetris.observe {}<|/call|>\n"
-      ]
+      "args_schema": "schemas/empty.args.schema.json"
     },
     "reset": {
       "summary": "Reset to a fresh game.",
-      "args_schema": "schemas/empty.args.schema.json",
-      "opcodes": [
-        "<|call|>tetris.reset {}<|/call|>\n"
-      ]
+      "args_schema": "schemas/empty.args.schema.json"
     }
   },
   "halt": [

@@ -60,9 +60,15 @@ The repo's purpose is **demonstration and validation**, not commercial vertical 
 
 ## 4. Architectural principles (Non-Negotiable)
 
-### 4.1 Kernel is sacred
+### 4.1 The kernel is this repo's now
 
-The kernel ([`mobile/src/lib/kernel/`](mobile/src/lib/kernel/)) is vendored from `llm_os/kernel/`. **Don't edit it locally.** All edits go upstream first, then re-vendor (see [`mobile/src/lib/kernel/VENDORED.md`](mobile/src/lib/kernel/VENDORED.md)).
+~~The kernel is vendored from `llm_os/kernel/`. Don't edit it locally; all edits go
+upstream first, then re-vendor.~~
+
+**Obsolete as of 2026-07-24.** `llm_os` is archived, so there is no upstream to send
+edits to. The kernel at [`mobile/public/demos/_kernel/`](mobile/public/demos/_kernel/)
+is now maintained here and edited directly. It stays small and dependency-free by
+choice, not by vendoring discipline.
 
 ### 4.2 Program-layer-first
 
@@ -165,7 +171,7 @@ When working on this repo, stop and ask Matias before:
 
 - Re-adding any trade-app concept (validators, blackboard, CartridgeRunner, schema-driven UI, agentic flows). The pivot intentionally removed these.
 - Adding any backend dependency, server, or external API call.
-- Editing the vendored kernel locally (always upstream-first).
+- ~~Editing the vendored kernel locally (always upstream-first).~~ — obsolete; `llm_os` is archived and the kernel lives here now.
 - Adding a new top-level dependency to `package.json`.
 - Re-introducing Capacitor / Android / iOS / PWA targets.
 - Adding cloud LLM calls.
