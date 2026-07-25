@@ -202,6 +202,109 @@ A test asserts a single-cartridge registry produces exactly what building that
 cartridge alone produces, so moving a demo onto the registry cannot quietly
 change its grammar.
 
+## Phase 5 — one kernel, two frontends
+
+The four phases above made the kernel general. This one points it at the thing
+that needs it.
+
+### The finding that motivates it
+
+`skillos_robot` and this repo emit **the same wire format**. Not similar — the
+opcode regex is character-for-character identical in both:
+
+```
+/<\|call\|>([a-zA-Z_][\w-]*)\.([a-zA-Z_][\w-]*)\s*([\s\S]*?)\s*<\|\/call\|>/
+```
+
+They were one codebase. What diverged is enforcement. This repo masks the
+sampler so malformed output is unreachable. The robot asks in the prompt, caps
+generation with stop sequences, and parses with that regex — the arm we measured
+and found unreliable.
+
+**It fails, and there is a recording.** On 2026-07-24, driving the 2D simulator
+against a Google model, one run produced **28 consecutive `unknown` opcodes**
+after the provider capped stop sequences from fourteen to five. The model chained
+instructions and the parser could not follow. Nothing was constrained; something
+was requested and then checked.
+
+So the validated mechanism runs a Tetris demo in a browser tab, and the
+unvalidated one drives motors. That is backwards, and it is the whole reason
+this phase exists: a malformed JSON in a chatbot is a retry, a malformed motor
+command is a robot hitting something.
+
+### The blocker, which is also the point
+
+The trie needs `getLogits` — per-token probabilities at each step. The robot's
+backend has **zero** references to logits, because it talks to cloud APIs that do
+not expose them.
+
+Putting the trie behind the robot therefore **forces a local model**. That is not
+an obstacle to route around; it is the position this work already argues for, and
+it turns "on-device" from a preference into a technical requirement.
+
+The kernel is five dependency-free ES modules and already runs under Node, which
+is where the robot lives. Nothing needs porting.
+
+### Week of 2026-07-27 — the concrete tasks
+
+**1 · A cartridge for the robot's ISA** *(~half a day)*
+
+Write `_cart/io/robot/manifest.json` declaring the six methods the robot exposes
+— `navigate`, `observe`, `describe`, `speak`, `listen`, `stop` — as `args_schema`
+files. After phases 1–3 this means writing schemas, not opcode strings: enums for
+the fixed choices, bounded integers for distances and headings, and a slot for
+`speak`'s free text.
+
+*Done when:* every opcode the compiler emits is accepted by `skillos_robot`'s
+`parseOpcode` regex. Assert it in a test rather than reading them.
+
+**2 · A local backend that exposes logits** *(~1 day, the real unknown)*
+
+The `Backend` interface needs seven methods; the one that decides everything is
+`getLogits(idx) → Array<{token, p}>`. Candidates in order of expected effort:
+wllama under Node, a `llama.cpp` server with `n_probs`, or an FFI binding.
+
+*Done when:* a local runtime returns per-token probabilities **and** its
+tokenizer treats `<|call|>` and `<|halt|>` as single tokens. Check the second
+part first — it is the one that fails.
+
+**3 · Wire the sampler in** *(~1 day)*
+
+Replace the orchestrator's `generate()` with `Sampler.generate()`, keeping the
+cloud path behind a flag so a bad week does not leave the robot unusable.
+
+*Done when:* a full simulator run completes with the trie in the loop.
+
+**4 · Measure it against the failure we already have** *(~half a day)*
+
+This step is why the recording matters. Run the same scenario N times on both
+paths and compare **unparseable-opcode rate**. The cloud+regex baseline is on
+record at 28 in a single run. The trie's floor is structurally zero — it cannot
+emit an opcode that is not in the trie — so the interesting number is not that
+one but `fellBackSteps`: how often nothing valid appeared in top-K and the
+sampler had to pick without the model's opinion.
+
+*Done when:* both numbers are written down. A trie run with a high
+`fellBackSteps` is syntactically perfect and strategically blind, and reporting
+only the zero would be the same mistake as reporting only positive results.
+
+### Risks, named in advance
+
+**The tokenizer is the one that can stall this.** Only LFM 2.5 is validated to
+treat the markers as single tokens; Qwen and Gemma split them, the trie's valid
+set stops intersecting top-K, and the sampler falls back to a deterministic
+non-choice. If no local candidate passes step 2, this phase stops there and the
+real work becomes the special-token migration — a different project, and worth
+knowing by Tuesday rather than Friday.
+
+**Latency is probably fine and should still be checked.** The 20 Hz motor loop is
+the reactive controller, not the model; the model plans at roughly 1 Hz. Local
+inference makes that slower, not the control loop.
+
+**What this does not touch:** the Program layer. A hand-written planner still
+does the planning and the model ratifies a ranked list. Phases 1–5 do not move
+that, and a phase that claimed to would be lying.
+
 ## All four phases are done
 
 What began as a hand-written list of complete instruction strings is now
