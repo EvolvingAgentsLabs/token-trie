@@ -209,14 +209,25 @@ that needs it.
 
 ### The finding that motivates it
 
-`skillos_robot` and this repo emit **the same wire format**. Not similar — the
-opcode regex is character-for-character identical in both:
+`skillos_robot` and this repo emit **almost** the same wire format. `CALL` and
+`THINK` are character-for-character identical in both:
 
 ```
 /<\|call\|>([a-zA-Z_][\w-]*)\.([a-zA-Z_][\w-]*)\s*([\s\S]*?)\s*<\|\/call\|>/
 ```
 
-They were one codebase. What diverged is enforcement. This repo masks the
+`HALT` is not, and the difference is observable rather than cosmetic: this repo
+accepts a bare `<|halt|>done`, the robot's dispatcher requires `status=` and
+rejects it. This repo also dispatches 3 of the 13 opcodes the robot parses, and
+the trie constrains 2 of them.
+
+Those numbers are measured, not asserted —
+[`__tests__/conformance.test.mjs`](__tests__/conformance.test.mjs) reads both
+dispatchers' source and fails if either the agreement or the divergence changes.
+Anyone reconverging them will be told.
+
+They were one codebase. What diverged is enforcement, and — in one opcode — the
+wire format too. This repo masks the
 sampler so malformed output is unreachable. The robot asks in the prompt, caps
 generation with stop sequences, and parses with that regex — the arm we measured
 and found unreliable.
